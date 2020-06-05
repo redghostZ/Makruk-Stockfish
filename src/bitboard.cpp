@@ -31,6 +31,8 @@ Bitboard SquareBB[SQUARE_NB];
 Bitboard LineBB[SQUARE_NB][SQUARE_NB];
 Bitboard PseudoAttacks[PIECE_TYPE_NB][SQUARE_NB];
 Bitboard PawnAttacks[COLOR_NB][SQUARE_NB];
+Bitboard BishopAttacks[COLOR_NB][SQUARE_NB];
+Bitboard QueenAttacks[COLOR_NB][SQUARE_NB];
 
 Magic RookMagics[SQUARE_NB];
 Magic BishopMagics[SQUARE_NB];
@@ -38,7 +40,6 @@ Magic BishopMagics[SQUARE_NB];
 namespace {
 
   Bitboard RookTable[0x19000];  // To store rook attacks
-  Bitboard BishopTable[0x1480]; // To store bishop attacks
 
   void init_magics(Bitboard table[], Magic magics[], Direction directions[]);
 }
@@ -69,7 +70,7 @@ const std::string Bitboards::pretty(Bitboard b) {
 void Bitboards::init() {
 
   for (unsigned i = 0; i < (1 << 16); ++i)
-      PopCnt16[i] = uint8_t(std::bitset<16>(i).count());
+      PopCnt16[i] = std::bitset<16>(i).count();
 
   for (Square s = SQ_A1; s <= SQ_H8; ++s)
       SquareBB[s] = (1ULL << s);
@@ -79,26 +80,34 @@ void Bitboards::init() {
           SquareDistance[s1][s2] = std::max(distance<File>(s1, s2), distance<Rank>(s1, s2));
 
   Direction RookDirections[] = { NORTH, EAST, SOUTH, WEST };
-  Direction BishopDirections[] = { NORTH_EAST, SOUTH_EAST, SOUTH_WEST, NORTH_WEST };
 
   init_magics(RookTable, RookMagics, RookDirections);
-  init_magics(BishopTable, BishopMagics, BishopDirections);
+
+  int steps[][6] = { {}, { 7, 9 }, { 7, 9 }, { 7, 8, 9, -7, -9 }, { 6, 10, 15, 17 }, {}, { 1, 7, 8, 9 } };
+
+  for (Color c : { WHITE, BLACK })
+      for (PieceType pt : { PAWN, QUEEN, BISHOP, KNIGHT, KING })
+          for (Square s = SQ_A1; s <= SQ_H8; ++s)
+              for (int i = 0; steps[pt][i]; ++i)
+              {
+                  Square to = s + Direction(c == WHITE ? steps[pt][i] : -steps[pt][i]);
+
+                  if (is_ok(to) && distance(s, to) < 3)
+                  {
+                      if (pt == PAWN)
+                          PawnAttacks[c][s] |= to;
+                      else if (pt == BISHOP)
+                          BishopAttacks[c][s] |= to;
+                      else
+                          PseudoAttacks[pt][s] |= to;
+                  }
+              }
 
   for (Square s1 = SQ_A1; s1 <= SQ_H8; ++s1)
   {
-      PawnAttacks[WHITE][s1] = pawn_attacks_bb<WHITE>(square_bb(s1));
-      PawnAttacks[BLACK][s1] = pawn_attacks_bb<BLACK>(square_bb(s1));
+      PseudoAttacks[ROOK][s1] = attacks_bb<  ROOK>(s1, 0);
 
-      for (int step : {-9, -8, -7, -1, 1, 7, 8, 9} )
-         PseudoAttacks[KING][s1] |= safe_destination(s1, step);
-
-      for (int step : {-17, -15, -10, -6, 6, 10, 15, 17} )
-         PseudoAttacks[KNIGHT][s1] |= safe_destination(s1, step);
-
-      PseudoAttacks[QUEEN][s1]  = PseudoAttacks[BISHOP][s1] = attacks_bb<BISHOP>(s1, 0);
-      PseudoAttacks[QUEEN][s1] |= PseudoAttacks[  ROOK][s1] = attacks_bb<  ROOK>(s1, 0);
-
-      for (PieceType pt : { BISHOP, ROOK })
+      for (PieceType pt : { ROOK })
           for (Square s2 = SQ_A1; s2 <= SQ_H8; ++s2)
               if (PseudoAttacks[pt][s1] & s2)
                   LineBB[s1][s2] = (attacks_bb(pt, s1, 0) & attacks_bb(pt, s2, 0)) | s1 | s2;

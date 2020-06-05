@@ -108,9 +108,8 @@ constexpr int MAX_PLY   = 246;
 ///
 /// bit  0- 5: destination square (from 0 to 63)
 /// bit  6-11: origin square (from 0 to 63)
-/// bit 12-13: promotion piece type - 2 (from KNIGHT-2 to QUEEN-2)
-/// bit 14-15: special move flag: promotion (1), en passant (2), castling (3)
-/// NOTE: EN-PASSANT bit is set only when a pawn can be captured
+/// bit 12-13: promotion piece type - 2 (QUEEN-2 = 0)
+/// bit 14-15: special move flag: promotion (1)
 ///
 /// Special cases are MOVE_NONE and MOVE_NULL. We can sneak these in because in
 /// any normal move destination square is always different from origin square
@@ -123,29 +122,11 @@ enum Move : int {
 
 enum MoveType {
   NORMAL,
-  PROMOTION = 1 << 14,
-  ENPASSANT = 2 << 14,
-  CASTLING  = 3 << 14
+  PROMOTION = 1 << 14
 };
 
 enum Color {
   WHITE, BLACK, COLOR_NB = 2
-};
-
-enum CastlingRights {
-  NO_CASTLING,
-  WHITE_OO,
-  WHITE_OOO = WHITE_OO << 1,
-  BLACK_OO  = WHITE_OO << 2,
-  BLACK_OOO = WHITE_OO << 3,
-
-  KING_SIDE      = WHITE_OO  | BLACK_OO,
-  QUEEN_SIDE     = WHITE_OOO | BLACK_OOO,
-  WHITE_CASTLING = WHITE_OO  | WHITE_OOO,
-  BLACK_CASTLING = BLACK_OO  | BLACK_OOO,
-  ANY_CASTLING   = WHITE_CASTLING | BLACK_CASTLING,
-
-  CASTLING_RIGHT_NB = 16
 };
 
 enum Phase {
@@ -181,34 +162,34 @@ enum Value : int {
   VALUE_MATE_IN_MAX_PLY  =  VALUE_MATE - MAX_PLY,
   VALUE_MATED_IN_MAX_PLY = -VALUE_MATE_IN_MAX_PLY,
 
-  PawnValueMg   = 124,   PawnValueEg   = 206,
+  PawnValueMg   = 124,   PawnValueEg   = 181,
+  QueenValueMg  = 353,   QueenValueEg  = 419,
+  BishopValueMg = 544,   BishopValueEg = 614,
   KnightValueMg = 781,   KnightValueEg = 854,
-  BishopValueMg = 825,   BishopValueEg = 915,
   RookValueMg   = 1276,  RookValueEg   = 1380,
-  QueenValueMg  = 2538,  QueenValueEg  = 2682,
   Tempo = 28,
 
   MidgameLimit  = 15258, EndgameLimit  = 3915
 };
 
 enum PieceType {
-  NO_PIECE_TYPE, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
+  NO_PIECE_TYPE, PAWN, QUEEN, BISHOP, KNIGHT, ROOK, KING,
   ALL_PIECES = 0,
   PIECE_TYPE_NB = 8
 };
 
 enum Piece {
   NO_PIECE,
-  W_PAWN = 1, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
-  B_PAWN = 9, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING,
+  W_PAWN = 1, W_QUEEN, W_BISHOP, W_KNIGHT, W_ROOK, W_KING,
+  B_PAWN = 9, B_QUEEN, B_BISHOP, B_KNIGHT, B_ROOK, B_KING,
   PIECE_NB = 16
 };
 
 constexpr Value PieceValue[PHASE_NB][PIECE_NB] = {
-  { VALUE_ZERO, PawnValueMg, KnightValueMg, BishopValueMg, RookValueMg, QueenValueMg, VALUE_ZERO, VALUE_ZERO,
-    VALUE_ZERO, PawnValueMg, KnightValueMg, BishopValueMg, RookValueMg, QueenValueMg, VALUE_ZERO, VALUE_ZERO },
-  { VALUE_ZERO, PawnValueEg, KnightValueEg, BishopValueEg, RookValueEg, QueenValueEg, VALUE_ZERO, VALUE_ZERO,
-    VALUE_ZERO, PawnValueEg, KnightValueEg, BishopValueEg, RookValueEg, QueenValueEg, VALUE_ZERO, VALUE_ZERO }
+  { VALUE_ZERO, PawnValueMg, QueenValueMg, BishopValueMg, KnightValueMg, RookValueMg, VALUE_ZERO, VALUE_ZERO,
+    VALUE_ZERO, PawnValueMg, QueenValueMg, BishopValueMg, KnightValueMg, RookValueMg, VALUE_ZERO, VALUE_ZERO },
+  { VALUE_ZERO, PawnValueEg, QueenValueEg, BishopValueEg, KnightValueEg, RookValueEg, VALUE_ZERO, VALUE_ZERO,
+    VALUE_ZERO, PawnValueEg, QueenValueEg, BishopValueEg, KnightValueEg, RookValueEg, VALUE_ZERO, VALUE_ZERO }
 };
 
 typedef int Depth;
@@ -370,10 +351,6 @@ constexpr Piece operator~(Piece pc) {
   return Piece(pc ^ 8); // Swap color of piece B_KNIGHT -> W_KNIGHT
 }
 
-constexpr CastlingRights operator&(Color c, CastlingRights cr) {
-  return CastlingRights((c == WHITE ? WHITE_CASTLING : BLACK_CASTLING) & cr);
-}
-
 constexpr Value mate_in(int ply) {
   return VALUE_MATE - ply;
 }
@@ -444,7 +421,7 @@ constexpr MoveType type_of(Move m) {
 }
 
 constexpr PieceType promotion_type(Move m) {
-  return PieceType(((m >> 12) & 3) + KNIGHT);
+  return PieceType(((m >> 12) & 3) + QUEEN);
 }
 
 constexpr Move make_move(Square from, Square to) {
@@ -456,8 +433,8 @@ constexpr Move reverse_move(Move m) {
 }
 
 template<MoveType T>
-constexpr Move make(Square from, Square to, PieceType pt = KNIGHT) {
-  return Move(T + ((pt - KNIGHT) << 12) + (from << 6) + to);
+constexpr Move make(Square from, Square to, PieceType pt = QUEEN) {
+  return Move(T + ((pt - QUEEN) << 12) + (from << 6) + to);
 }
 
 constexpr bool is_ok(Move m) {

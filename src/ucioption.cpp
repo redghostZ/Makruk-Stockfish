@@ -38,9 +38,9 @@ namespace UCI {
 
 /// 'On change' actions, triggered by an option's value change
 void on_clear_hash(const Option&) { Search::clear(); }
-void on_hash_size(const Option& o) { TT.resize(size_t(o)); }
+void on_hash_size(const Option& o) { TT.resize(o); }
 void on_logger(const Option& o) { start_logger(o); }
-void on_threads(const Option& o) { Threads.set(size_t(o)); }
+void on_threads(const Option& o) { Threads.set(o); }
 void on_tb_path(const Option& o) { Tablebases::init(o); }
 
 
@@ -74,11 +74,12 @@ void init(OptionsMap& o) {
   o["nodestime"]             << Option(0, 0, 10000);
   o["UCI_Chess960"]          << Option(false);
   o["UCI_AnalyseMode"]       << Option(false);
+  o["UCI_Variant"]           << Option("makruk", {"makruk","asean"});
   o["UCI_LimitStrength"]     << Option(false);
   o["UCI_Elo"]               << Option(1350, 1350, 2850);
   o["SyzygyPath"]            << Option("<empty>", on_tb_path);
   o["SyzygyProbeDepth"]      << Option(1, 1, 100);
-  o["Syzygy50MoveRule"]      << Option(true);
+  o["Syzygy50MoveRule"]      << Option(false);
   o["SyzygyProbeLimit"]      << Option(7, 0, 7);
 }
 
@@ -95,8 +96,12 @@ std::ostream& operator<<(std::ostream& os, const OptionsMap& om) {
               const Option& o = it.second;
               os << "\noption name " << it.first << " type " << o.type;
 
-              if (o.type == "string" || o.type == "check" || o.type == "combo")
+              if (o.type == "string" || o.type == "check" || o.type != "button")
                   os << " default " << o.defaultValue;
+
+              if (o.type == "combo")
+                  for (string value : o.comboValues)
+                      os << " var " << value;
 
               if (o.type == "spin")
                   os << " default " << int(stof(o.defaultValue))
@@ -115,29 +120,37 @@ std::ostream& operator<<(std::ostream& os, const OptionsMap& om) {
 Option::Option(const char* v, OnChange f) : type("string"), min(0), max(0), on_change(f)
 { defaultValue = currentValue = v; }
 
+Option::Option(const char* v, const std::vector<std::string>& variants, OnChange f) : type("combo"), min(0), max(0), comboValues(variants), on_change(f)
+{ defaultValue = currentValue = v; }
+
 Option::Option(bool v, OnChange f) : type("check"), min(0), max(0), on_change(f)
 { defaultValue = currentValue = (v ? "true" : "false"); }
 
 Option::Option(OnChange f) : type("button"), min(0), max(0), on_change(f)
 {}
 
-Option::Option(double v, int minv, int maxv, OnChange f) : type("spin"), min(minv), max(maxv), on_change(f)
+Option::Option(int v, int minv, int maxv, OnChange f) : type("spin"), min(minv), max(maxv), on_change(f)
 { defaultValue = currentValue = std::to_string(v); }
 
 Option::Option(const char* v, const char* cur, OnChange f) : type("combo"), min(0), max(0), on_change(f)
 { defaultValue = v; currentValue = cur; }
 
-Option::operator double() const {
+Option::operator int() const {
   assert(type == "check" || type == "spin");
-  return (type == "spin" ? stof(currentValue) : currentValue == "true");
+  return (type == "spin" ? stoi(currentValue) : currentValue == "true");
 }
 
 Option::operator std::string() const {
-  assert(type == "string");
+  assert(type == "string" || type == "combo");
   return currentValue;
 }
 
-bool Option::operator==(const char* s) const {
+int Option::compare(const char* str) const {
+  assert(type == "string" || type == "combo");
+  return currentValue.compare(str);
+}
+
+bool Option::operator==(const char* s) {
   assert(type == "combo");
   return   !CaseInsensitiveLess()(currentValue, s)
         && !CaseInsensitiveLess()(s, currentValue);
@@ -165,7 +178,8 @@ Option& Option::operator=(const string& v) {
 
   if (   (type != "button" && v.empty())
       || (type == "check" && v != "true" && v != "false")
-      || (type == "spin" && (stof(v) < min || stof(v) > max)))
+      || (type == "combo" && (std::find(comboValues.begin(), comboValues.end(), v) == comboValues.end()))
+      || (type == "spin" && (stoi(v) < min || stoi(v) > max)))
       return *this;
 
   if (type == "combo")

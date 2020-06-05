@@ -33,21 +33,23 @@ namespace {
 
   // Pawn penalties
   constexpr Score Backward      = S( 9, 24);
+  constexpr Score BlockedStorm  = S(41, 41);
   constexpr Score Doubled       = S(11, 56);
   constexpr Score Isolated      = S( 5, 15);
   constexpr Score WeakLever     = S( 0, 56);
   constexpr Score WeakUnopposed = S(13, 27);
 
-  constexpr Score BlockedStorm[RANK_NB]  = {S( 0, 0), S( 0, 0), S( 76, 78), S(-10, 15), S(-7, 10), S(-4, 6), S(-1, 2)};
-
   // Connected pawn bonus
-  constexpr int Connected[RANK_NB] = { 0, 7, 8, 12, 29, 48, 86 };
+  constexpr int Connected[RANK_NB] = { 0, 0, 8, 12, 29 };
+
+  // BlockPawn penalties
+  constexpr Score BlockedOne   = S(110, 0);
 
   // Strength of pawn shelter for our king by [distance from edge][rank].
   // RANK_1 = 0 is used for files where we have no pawn, or pawn is behind our king.
   constexpr Value ShelterStrength[int(FILE_NB) / 2][RANK_NB] = {
-    { V( -6), V( 81), V( 93), V( 58), V( 39), V( 18), V(  25) },
-    { V(-43), V( 61), V( 35), V(-49), V(-29), V(-11), V( -63) },
+    { V( -6), V( 81), V( 63), V( 58), V( 39), V( 18), V(  25) },
+    { V(-43), V( 61), V( 23), V(-49), V(-29), V(-11), V( -63) },
     { V(-10), V( 75), V( 23), V( -2), V( 32), V(  3), V( -45) },
     { V(-39), V(-13), V(-29), V(-52), V(-48), V(-67), V(-166) }
   };
@@ -57,10 +59,10 @@ namespace {
   // is behind our king. Note that UnblockedStorm[0][1-2] accommodate opponent pawn
   // on edge, likely blocked by our king.
   constexpr Value UnblockedStorm[int(FILE_NB) / 2][RANK_NB] = {
-    { V( 85), V(-289), V(-166), V(97), V(50), V( 45), V( 50) },
-    { V( 46), V( -25), V( 122), V(45), V(37), V(-10), V( 20) },
-    { V( -6), V(  51), V( 168), V(34), V(-2), V(-22), V(-14) },
-    { V(-15), V( -11), V( 101), V( 4), V(11), V(-15), V(-29) }
+    { V( 89), V(-285), V(-185), V( 37), V(57), V( 45), V( 51) },
+    { V( 44), V( -18), V( 123), V( 46), V(39), V( -7), V( 23) },
+    { V(  4), V(  52), V( 162), V(135), V( 7), V(-14), V( -2) },
+    { V(-10), V( -14), V(  90), V(185), V( 2), V( -7), V(-16) }
   };
 
   #undef S
@@ -87,7 +89,6 @@ namespace {
     e->passedPawns[Us] = 0;
     e->kingSquares[Us] = SQ_NONE;
     e->pawnAttacks[Us] = e->pawnAttacksSpan[Us] = pawn_attacks_bb<Us>(ourPawns);
-    e->blockedCount += popcount(shift<Up>(ourPawns) & (theirPawns | doubleAttackThem));
 
     // Loop through all pawns of the current color and score each pawn
     while ((s = *pl++) != SQ_NONE)
@@ -100,12 +101,14 @@ namespace {
         opposed    = theirPawns & forward_file_bb(Us, s);
         blocked    = theirPawns & (s + Up);
         stoppers   = theirPawns & passed_pawn_span(Us, s);
-        lever      = theirPawns & pawn_attacks_bb(Us, s);
-        leverPush  = theirPawns & pawn_attacks_bb(Us, s + Up);
+        lever      = theirPawns & PawnAttacks[Us][s];
+        leverPush  = theirPawns & PawnAttacks[Us][s + Up];
         doubled    = ourPawns   & (s - Up);
         neighbours = ourPawns   & adjacent_files_bb(s);
         phalanx    = neighbours & rank_bb(s);
         support    = neighbours & rank_bb(s - Up);
+
+        e->blockedCount += ((pos.pieces(PAWN) & (s + Up)) || more_than_one(leverPush)) && !lever;
 
         // A pawn is backward when it is behind all pawns of the same color on
         // the adjacent files and cannot safely advance.
@@ -144,15 +147,8 @@ namespace {
         }
 
         else if (!neighbours)
-        {
-            if (     opposed
-                &&  (ourPawns & forward_file_bb(Them, s))
-                && !(theirPawns & adjacent_files_bb(s)))
-                score -= Doubled;
-            else
-                score -=   Isolated
-                         + WeakUnopposed * !opposed;
-        }
+            score -=   Isolated
+                     + WeakUnopposed * !opposed;
 
         else if (backward)
             score -=   Backward
@@ -161,6 +157,197 @@ namespace {
         if (!support)
             score -=   Doubled * doubled
                      + WeakLever * more_than_one(lever);
+
+  //4 pieces
+  int countE1 = 0;
+  int countE2 = 0;
+  int countE4 = 0;
+  int countE5 = 0;
+  int countE6 = 0;
+  int countE7 = 0;
+  int countE8 = 0;
+  int countE9 = 0;
+  int countE10 = 0;
+  int countE11 = 0;
+  int countE12 = 0;
+  int countE13 = 0;
+  int countE14 = 0;
+  int countE15 = 0;
+  int countE16 = 0;
+  int countE17 = 0;
+  int countE18 = 0;
+  int countE19 = 0;
+  int countD1 = 0;
+  int countD2 = 0;
+  int countD4 = 0;
+  int countD5 = 0;
+  int countD6 = 0;
+  int countD7 = 0;
+  int countD8 = 0;
+  int countD9 = 0;
+  int countD10 = 0;
+  int countD11 = 0;
+  int countD12 = 0;
+  int countD13 = 0;
+  int countD14 = 0;
+  int countD15 = 0;
+  int countD16 = 0;
+  int countD17 = 0;
+  int countD18 = 0;
+  int countD19 = 0;
+  int countF1 = 0;
+  int countF2 = 0;
+  int countF3 = 0;
+  int countB1 = 0;
+  int countB2 = 0;
+  int countB3 = 0;
+  int countC1 = 0;
+  int countC2 = 0;
+  int countC3 = 0;
+  int countG1 = 0;
+  int countG2 = 0;
+  int countG3 = 0;
+  // 6 pieces US THEM 12 both color
+  int countZ1 = 0;
+  int countZ2 = 0;
+  int countZ3 = 0;
+  int countZ4 = 0;
+  // 6 pieces US THEM 12 same color
+  int countX1 = 0;
+
+  //4 pieces
+  countE1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_G5))));
+
+  countE2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4))));
+
+  countE4 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D3) | relative_square(Us, SQ_F4))));
+
+  countE5 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G5))));
+
+  countE6 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_H4))));
+
+  countE7 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F3) | relative_square(Us, SQ_G5))));
+
+  countE8 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F4))));
+
+  countE9 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_C3) | relative_square(Us, SQ_F4))));
+
+  countE10 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F4))));
+
+  countE11 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_G5) | relative_square(Us, SQ_H4))));
+
+  countE12 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_G5))));
+
+  countE13 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_G5))));
+
+  countE14 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G5))));
+
+  countE15 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D4))));
+
+  countE16 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D4))));
+
+  countE17 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C5))));
+
+  countE18 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F4))));
+
+  countE19 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_E5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4))));
+
+  countD1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5))));
+
+  countD2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F5))));
+
+  countD4 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E3) | relative_square(Us, SQ_F5))));
+
+  countD5 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4))));
+
+  countD6 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_A4) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4))));
+
+  countD7 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C3) | relative_square(Us, SQ_E4))));
+
+  countD8 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_F4))));
+
+  countD9 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_F3))));
+
+  countD10 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_H5))));
+
+  countD11 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_A4) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_F5))));
+
+  countD12 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G4))));
+
+  countD13 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F5))));
+
+  countD14 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F5))));
+
+  countD15 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G4))));
+
+  countD16 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_H5))));
+
+  countD17 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5))));
+
+  countD18 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G4))));
+
+  countD19 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_D5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5))));
+
+  countF1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_F5)) | relative_square(Us, SQ_A4) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4))));
+
+  countF2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_F5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5))));
+
+  countF3 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_F5)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4))));
+
+  countB1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_B5)) | relative_square(Us, SQ_A4) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4))));
+
+  countB2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_B5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5))));
+
+  countB3 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_B5)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F3) | relative_square(Us, SQ_G4))));
+
+  countC1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_C5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_H4))));
+
+  countC2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_C5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4))));
+
+  countC3 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_C5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G5))));
+
+  countG1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_G5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_H4))));
+
+  countG2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_G5)) | relative_square(Us, SQ_A5) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4))));
+
+  countG3 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_G5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C3) | relative_square(Us, SQ_D4) | relative_square(Us, SQ_F4))));
+
+  // 6 pieces US THEM 12 both color
+  countZ1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_A4)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G5) | relative_square(Us, SQ_H4)))
+                     | (pos.pieces(Them, PAWN) & (square_bb(relative_square(Us, SQ_A5)) | relative_square(Us, SQ_B6) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G6) | relative_square(Us, SQ_H5))));
+
+  countZ2 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_A4)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G3) | relative_square(Us, SQ_H4)))
+                     | (pos.pieces(Them, PAWN) & (square_bb(relative_square(Us, SQ_A5)) | relative_square(Us, SQ_B6) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G6) | relative_square(Us, SQ_H5))));
+
+  countZ3 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_A4)) | relative_square(Us, SQ_B3) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_F4) | relative_square(Us, SQ_G5) | relative_square(Us, SQ_H4)))
+                     | (pos.pieces(Them, PAWN) & (square_bb(relative_square(Us, SQ_A5)) | relative_square(Us, SQ_B6) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G6) | relative_square(Us, SQ_H5))));
+
+  countZ4 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_A5)) | relative_square(Us, SQ_B4) | relative_square(Us, SQ_C3) | relative_square(Us, SQ_F3) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H5)))
+                     | (pos.pieces(Them, PAWN) & (square_bb(relative_square(Us, SQ_A6)) | relative_square(Us, SQ_B5) | relative_square(Us, SQ_C6) | relative_square(Us, SQ_F6) | relative_square(Us, SQ_G5) | relative_square(Us, SQ_H6))));
+
+  // 6 pieces US THEM 12 same color
+  countX1 = popcount(  (pos.pieces(Us,   PAWN) & (square_bb(relative_square(Us, SQ_B3)) | relative_square(Us, SQ_C4) | relative_square(Us, SQ_E4) | relative_square(Us, SQ_F5) | relative_square(Us, SQ_G4) | relative_square(Us, SQ_H3)))
+                     | (pos.pieces(Them, PAWN) & (square_bb(relative_square(Us, SQ_B4)) | relative_square(Us, SQ_C5) | relative_square(Us, SQ_D6) | relative_square(Us, SQ_E5) | relative_square(Us, SQ_G5) | relative_square(Us, SQ_H4))));
+
+  //4 pieces
+  if ((countE1 >= 5) | (countE2 >= 4)| (countE4 >= 4) | (countE5 >= 4) | (countE6 >= 5)| (countE7 >= 4) | (countE8 >= 4) | (countE9 >= 4) | (countE10 >= 4) | (countE11 >= 4) | (countE12 >= 4) | (countE13 >= 4)
+       | (countE14 >= 4) | (countE15 >= 4) | (countE16 >= 4) | (countE17 >= 4) | (countE18 >= 4) | (countE19 >= 5) | (countC1 >= 5) | (countC2 >= 5) | (countC3 >= 5) | (countG1 >= 5) | (countG2 >= 5) | (countG3 >= 5))
+      score -= BlockedOne;
+  if ((countD1 >= 5) | (countD2 >= 4)| (countD4 >= 4) | (countD5 >= 4) | (countD6 >= 5)| (countD7 >= 4) | (countD8 >= 4) | (countD9 >= 4) | (countD10 >= 4) | (countD11 >= 4) | (countD12 >= 4) | (countD13 >= 4)
+       | (countD14 >= 4) | (countD15 >= 4) | (countD16 >= 4) | (countD17 >= 4) | (countD18 >= 4) | (countD19 >= 5) | (countF1 >= 5) | (countF2 >= 5) | (countF3 >= 5) | (countB1 >= 5) | (countB2 >= 5) | (countB3 >= 5))
+      score -= BlockedOne;
+  // 6 pieces US THEM 12 both color
+  if (countZ1 >= 12)
+      score -= BlockedOne;
+  if (countZ2 >= 12)
+      score -= BlockedOne;
+  if (countZ3 >= 12)
+      score -= BlockedOne;
+  if (countZ4 >= 12)
+      score -= BlockedOne;
+  // 6 pieces US THEM 12 same color
+  if (countX1 >= 12)
+      score -= BlockedOne;
     }
 
     return score;
@@ -201,7 +388,7 @@ Score Entry::evaluate_shelter(const Position& pos, Square ksq) {
   constexpr Color Them = ~Us;
 
   Bitboard b = pos.pieces(PAWN) & ~forward_ranks_bb(Them, ksq);
-  Bitboard ourPawns = b & pos.pieces(Us) & ~pawnAttacks[Them];
+  Bitboard ourPawns = b & pos.pieces(Us);
   Bitboard theirPawns = b & pos.pieces(Them);
 
   Score bonus = make_score(5, 5);
@@ -215,11 +402,11 @@ Score Entry::evaluate_shelter(const Position& pos, Square ksq) {
       b = theirPawns & file_bb(f);
       int theirRank = b ? relative_rank(Us, frontmost_sq(Them, b)) : 0;
 
-      int d = edge_distance(f);
+      File d = File(edge_distance(f));
       bonus += make_score(ShelterStrength[d][ourRank], 0);
 
       if (ourRank && (ourRank == theirRank - 1))
-          bonus -= BlockedStorm[theirRank];
+          bonus -= BlockedStorm * int(theirRank == RANK_4);
       else
           bonus -= make_score(UnblockedStorm[d][theirRank], 0);
   }
@@ -236,24 +423,14 @@ Score Entry::do_king_safety(const Position& pos) {
 
   Square ksq = pos.square<KING>(Us);
   kingSquares[Us] = ksq;
-  castlingRights[Us] = pos.castling_rights(Us);
-  auto compare = [](Score a, Score b) { return mg_value(a) < mg_value(b); };
 
   Score shelter = evaluate_shelter<Us>(pos, ksq);
-
-  // If we can castle use the bonus after castling if it is bigger
-
-  if (pos.can_castle(Us & KING_SIDE))
-      shelter = std::max(shelter, evaluate_shelter<Us>(pos, relative_square(Us, SQ_G1)), compare);
-
-  if (pos.can_castle(Us & QUEEN_SIDE))
-      shelter = std::max(shelter, evaluate_shelter<Us>(pos, relative_square(Us, SQ_C1)), compare);
 
   // In endgame we like to bring our king near our closest pawn
   Bitboard pawns = pos.pieces(Us, PAWN);
   int minPawnDist = 6;
 
-  if (pawns & attacks_bb<KING>(ksq))
+  if (pawns & PseudoAttacks[KING][ksq])
       minPawnDist = 1;
   else while (pawns)
       minPawnDist = std::min(minPawnDist, distance(ksq, pop_lsb(&pawns)));

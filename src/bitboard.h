@@ -78,6 +78,8 @@ extern Bitboard SquareBB[SQUARE_NB];
 extern Bitboard LineBB[SQUARE_NB][SQUARE_NB];
 extern Bitboard PseudoAttacks[PIECE_TYPE_NB][SQUARE_NB];
 extern Bitboard PawnAttacks[COLOR_NB][SQUARE_NB];
+extern Bitboard BishopAttacks[COLOR_NB][SQUARE_NB];
+extern Bitboard QueenAttacks[COLOR_NB][SQUARE_NB];
 
 
 /// Magic holds all magic bitboards relevant data for a single square
@@ -175,11 +177,15 @@ constexpr Bitboard pawn_attacks_bb(Bitboard b) {
   return C == WHITE ? shift<NORTH_WEST>(b) | shift<NORTH_EAST>(b)
                     : shift<SOUTH_WEST>(b) | shift<SOUTH_EAST>(b);
 }
-
-inline Bitboard pawn_attacks_bb(Color c, Square s) {
-
-  assert(is_ok(s));
-  return PawnAttacks[c][s];
+template<Color C>
+constexpr Bitboard bishop_attacks_bb(Bitboard b) {
+  return C == WHITE ? shift<NORTH_WEST>(b) | shift<NORTH_EAST>(b) | shift<NORTH>(b) | shift<SOUTH_WEST>(b) | shift<SOUTH_EAST>(b)
+                    : shift<SOUTH_WEST>(b) | shift<SOUTH_EAST>(b) | shift<SOUTH>(b) | shift<NORTH_WEST>(b) | shift<NORTH_EAST>(b);
+}
+template<Color C>
+constexpr Bitboard queen_attacks_bb(Bitboard b) {
+  return C == WHITE ? shift<NORTH_WEST>(b) | shift<NORTH_EAST>(b) | shift<SOUTH_WEST>(b) | shift<SOUTH_EAST>(b)
+                    : shift<SOUTH_WEST>(b) | shift<SOUTH_EAST>(b) | shift<NORTH_WEST>(b) | shift<NORTH_EAST>(b);
 }
 
 
@@ -272,44 +278,23 @@ inline Bitboard safe_destination(Square s, int step)
     return is_ok(to) && distance(s, to) <= 2 ? square_bb(to) : Bitboard(0);
 }
 
-/// attacks_bb(Square) returns the pseudo attacks of the give piece type
-/// assuming an empty board.
-
-template<PieceType Pt>
-inline Bitboard attacks_bb(Square s) {
-
-  assert((Pt != PAWN) && (is_ok(s)));
-
-  return PseudoAttacks[Pt][s];
-}
-
-/// attacks_bb(Square, Bitboard) returns the attacks by the given piece
-/// assuming the board is occupied according to the passed Bitboard.
-/// Sliding piece attacks do not continue passed an occupied square.
+/// attacks_bb() returns a bitboard representing all the squares attacked by a
+/// piece of type Pt (bishop or rook) placed on 's'.
 
 template<PieceType Pt>
 inline Bitboard attacks_bb(Square s, Bitboard occupied) {
 
-  assert((Pt != PAWN) && (is_ok(s)));
-
-  switch (Pt)
-  {
-  case BISHOP: return BishopMagics[s].attacks[BishopMagics[s].index(occupied)];
-  case ROOK  : return   RookMagics[s].attacks[  RookMagics[s].index(occupied)];
-  case QUEEN : return attacks_bb<BISHOP>(s, occupied) | attacks_bb<ROOK>(s, occupied);
-  default    : return PseudoAttacks[Pt][s];
-  }
+  const Magic& m = RookMagics[s];
+  return m.attacks[m.index(occupied)];
 }
 
 inline Bitboard attacks_bb(PieceType pt, Square s, Bitboard occupied) {
 
-  assert((pt != PAWN) && (is_ok(s)));
+  assert(pt != PAWN && pt != BISHOP);
 
   switch (pt)
   {
-  case BISHOP: return attacks_bb<BISHOP>(s, occupied);
   case ROOK  : return attacks_bb<  ROOK>(s, occupied);
-  case QUEEN : return attacks_bb<BISHOP>(s, occupied) | attacks_bb<ROOK>(s, occupied);
   default    : return PseudoAttacks[pt][s];
   }
 }
