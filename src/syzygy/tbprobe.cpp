@@ -530,7 +530,7 @@ int decompress_pairs(PairsData* d, uint64_t idx) {
     //       I(k) = k * d->span + d->span / 2      (1)
 
     // First step is to get the 'k' of the I(k) nearest to our idx, using definition (1)
-    uint32_t k = uint32_t(idx / d->span);
+    uint32_t k = idx / d->span;
 
     // Then we read the corresponding SparseIndex[] entry
     uint32_t block = number<uint32_t, LittleEndian>(&d->sparseIndex[k].block);
@@ -576,7 +576,7 @@ int decompress_pairs(PairsData* d, uint64_t idx) {
         // All the symbols of a given length are consecutive integers (numerical
         // sequence property), so we can compute the offset of our symbol of
         // length len, stored at the beginning of buf64.
-        sym = Sym((buf64 - d->base64[len]) >> (64 - len - d->minSymLen));
+        sym = (buf64 - d->base64[len]) >> (64 - len - d->minSymLen);
 
         // Now add the value of the lowest symbol of length len to get our symbol
         sym += number<Sym, LittleEndian>(&d->lowestSym[len]);
@@ -739,8 +739,8 @@ Ret do_probe_table(const Position& pos, T* entry, WDLScore wdl, ProbeState* resu
 
     // Then we reorder the pieces to have the same sequence as the one stored
     // in pieces[i]: the sequence that ensures the best compression.
-    for (int i = leadPawnsCnt; i < size - 1; ++i)
-        for (int j = i + 1; j < size; ++j)
+    for (int i = leadPawnsCnt; i < size; ++i)//pr0rp
+        for (int j = i; j < size; ++j)//pr0rp
             if (d->pieces[i] == pieces[j])
             {
                 std::swap(pieces[i], pieces[j]);
@@ -984,7 +984,7 @@ uint8_t* set_sizes(PairsData* d, uint8_t* data) {
 
     d->sizeofBlock = 1ULL << *data++;
     d->span = 1ULL << *data++;
-    d->sparseIndexSize = size_t((tbSize + d->span - 1) / d->span); // Round up
+    d->sparseIndexSize = (tbSize + d->span - 1) / d->span; // Round up
     auto padding = number<uint8_t, LittleEndian>(data++);
     d->blocksNum = number<uint32_t, LittleEndian>(data); data += sizeof(uint32_t);
     d->blockLengthSize = d->blocksNum + padding; // Padded to ensure SparseIndex[]
