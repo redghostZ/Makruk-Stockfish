@@ -2,7 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
-  Copyright (C) 2015-2017 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
+  Copyright (C) 2015-2021 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -36,10 +36,6 @@
 
 using std::string;
 
-namespace PSQT {
-  extern Score psq[PIECE_NB][SQUARE_NB];
-}
-
 namespace Zobrist {
 
   Key psq[PIECE_NB][SQUARE_NB];
@@ -50,28 +46,33 @@ namespace {
 
 const string PieceToChar(" PMSNRK  pmsnrk");
 
-const Piece Pieces[] = { W_PAWN, W_QUEEN, W_BISHOP, W_KNIGHT, W_ROOK, W_KING,
-                         B_PAWN, B_QUEEN, B_BISHOP, B_KNIGHT, B_ROOK, B_KING };
+constexpr Piece Pieces[] = { W_PAWN, W_QUEEN, W_BISHOP, W_KNIGHT, W_ROOK, W_KING,
+                             B_PAWN, B_QUEEN, B_BISHOP, B_KNIGHT, B_ROOK, B_KING };
 
 // min_attacker() is a helper function used by see_ge() to locate the least
 // valuable attacker for the side to move, remove the attacker we just found
 // from the bitboards and scan for new X-ray attacks behind it.
 
-template<int Pt>
-PieceType min_attacker(const Bitboard* bb, Square to, Bitboard stmAttackers,
+template<PieceType Pt>
+PieceType min_attacker(const Bitboard* byTypeBB, Square to, Bitboard stmAttackers,
                        Bitboard& occupied, Bitboard& attackers) {
 
-  Bitboard b = stmAttackers & bb[Pt];
+  Bitboard b = stmAttackers & byTypeBB[Pt];
   if (!b)
-      return min_attacker<Pt + 1>(bb, to, stmAttackers, occupied, attackers);
+      return min_attacker<PieceType(Pt + 1)>(byTypeBB, to, stmAttackers, occupied, attackers);
 
-  occupied ^= b & ~(b - 1);
+  occupied ^= lsb(b); // Remove the attacker from occupied
 
+  // Add any X-ray attack behind the just removed piece. For instance with
+  // rooks in a8 and a7 attacking a1, after removing a7 we add rook in a8.
+  // Note that new added attackers can be of any color.
   if (Pt == BISHOP || Pt == ROOK)
-      attackers |= attacks_bb<ROOK>(to, occupied) & bb[ROOK];
+      attackers |= attacks_bb<ROOK>(to, occupied) & byTypeBB[ROOK];
 
-  attackers &= occupied; // After X-ray that may add already processed pieces
-  return (PieceType)Pt;
+  // X-ray may add already processed pieces because byTypeBB[] is constant: in
+  // the rook example, now attackers contains _again_ rook in a7, so remove it.
+  attackers &= occupied;
+  return Pt;
 }
 
 template<>
@@ -119,6 +120,19 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
 }
 
 
+// Marcel van Kervinck's cuckoo algorithm for fast detection of "upcoming repetition"
+// situations. Description of the algorithm in the following paper:
+// https://marcelk.net/2013-04-06/paper/upcoming-rep-v2.pdf
+
+// First and second hash functions for indexing the cuckoo tables
+inline int H1(Key h) { return h & 0x1fff; }
+inline int H2(Key h) { return (h >> 16) & 0x1fff; }
+
+// Cuckoo tables with Zobrist hashes of valid reversible moves, and the moves themselves
+Key cuckoo[8192];
+Move cuckooMove[8192];
+
+
 /// Position::init() initializes at startup the various arrays used to compute
 /// hash keys.
 
@@ -132,6 +146,30 @@ void Position::init() {
 
   Zobrist::side = rng.rand<Key>();
   Zobrist::noPawns = rng.rand<Key>();
+
+  // Prepare the cuckoo tables
+  std::memset(cuckoo, 0, sizeof(cuckoo));
+  std::memset(cuckooMove, 0, sizeof(cuckooMove));
+  int count = 0;
+  for (Piece pc : Pieces)
+      for (Square s1 = SQ_A1; s1 <= SQ_H8; ++s1)
+          for (Square s2 = Square(s1 + 1); s2 <= SQ_H8; ++s2)
+              if (PseudoAttacks[type_of(pc)][s1] & s2)
+              {
+                  Move move = make_move(s1, s2);
+                  Key key = Zobrist::psq[pc][s1] ^ Zobrist::psq[pc][s2] ^ Zobrist::side;
+                  int i = H1(key);
+                  while (true)
+                  {
+                      std::swap(cuckoo[i], key);
+                      std::swap(cuckooMove[i], move);
+                      if (move == MOVE_NONE) // Arrived at empty slot?
+                          break;
+                      i = (i == H1(key)) ? H2(key) : H1(key); // Push victim to alternative slot
+                  }
+                  count++;
+             }
+  assert(count == 3668);
 }
 
 
@@ -184,10 +222,10 @@ Position& Position::set(const string& fenStr, bool isChess960, StateInfo* si, Th
   while ((ss >> token) && !isspace(token))
   {
       if (isdigit(token))
-          sq += Square(token - '0'); // Advance the given number of files
+          sq += (token - '0') * EAST; // Advance the given number of files
 
       else if (token == '/')
-          sq -= Square(16);
+          sq += 2 * SOUTH;
 
       else if ((idx = PieceToChar.find(token)) != string::npos)
       {
@@ -229,8 +267,8 @@ Position& Position::set(const string& fenStr, bool isChess960, StateInfo* si, Th
 
 void Position::set_check_info(StateInfo* si) const {
 
-  si->blockersForKing[WHITE] = slider_blockers(pieces(BLACK), square<KING>(WHITE), si->pinnersForKing[WHITE]);
-  si->blockersForKing[BLACK] = slider_blockers(pieces(WHITE), square<KING>(BLACK), si->pinnersForKing[BLACK]);
+  si->blockersForKing[WHITE] = slider_blockers(pieces(BLACK), square<KING>(WHITE), si->pinners[BLACK]);
+  si->blockersForKing[BLACK] = slider_blockers(pieces(WHITE), square<KING>(BLACK), si->pinners[WHITE]);
 
   Square ksq = square<KING>(~sideToMove);
 
@@ -253,7 +291,6 @@ void Position::set_state(StateInfo* si) const {
   si->key = si->materialKey = 0;
   si->pawnKey = Zobrist::noPawns;
   si->nonPawnMaterial[WHITE] = si->nonPawnMaterial[BLACK] = VALUE_ZERO;
-  si->psq = SCORE_ZERO;
   si->checkersBB = attackers_to(square<KING>(sideToMove)) & pieces(~sideToMove);
 
   set_check_info(si);
@@ -263,26 +300,20 @@ void Position::set_state(StateInfo* si) const {
       Square s = pop_lsb(&b);
       Piece pc = piece_on(s);
       si->key ^= Zobrist::psq[pc][s];
-      si->psq += PSQT::psq[pc][s];
+
+      if (type_of(pc) == PAWN)
+          si->pawnKey ^= Zobrist::psq[pc][s];
+
+      else if (type_of(pc) != KING)
+          si->nonPawnMaterial[color_of(pc)] += PieceValue[MG][pc];
   }
 
   if (sideToMove == BLACK)
       si->key ^= Zobrist::side;
 
-  for (Bitboard b = pieces(PAWN); b; )
-  {
-      Square s = pop_lsb(&b);
-      si->pawnKey ^= Zobrist::psq[piece_on(s)][s];
-  }
-
   for (Piece pc : Pieces)
-  {
-      if (type_of(pc) != PAWN && type_of(pc) != KING)
-          si->nonPawnMaterial[color_of(pc)] += pieceCount[pc] * PieceValue[MG][pc];
-
       for (int cnt = 0; cnt < pieceCount[pc]; ++cnt)
           si->materialKey ^= Zobrist::psq[pc][cnt];
-  }
 }
 
 
@@ -350,25 +381,26 @@ const string Position::fen() const {
 
 Bitboard Position::slider_blockers(Bitboard sliders, Square s, Bitboard& pinners) const {
 
-  Bitboard result = 0;
+  Bitboard blockers = 0;
   pinners = 0;
 
-  // Snipers are sliders that attack 's' when a piece is removed
+  // Snipers are sliders that attack 's' when a piece and other snipers are removed
   Bitboard snipers = PseudoAttacks[ROOK][s] & pieces(ROOK) & sliders;
+  Bitboard occupancy = pieces() ^ snipers;
 
   while (snipers)
   {
     Square sniperSq = pop_lsb(&snipers);
-    Bitboard b = between_bb(s, sniperSq) & pieces();
+    Bitboard b = between_bb(s, sniperSq) & occupancy;
 
-    if (!more_than_one(b))
+    if (b && !more_than_one(b))
     {
-        result |= b;
+        blockers |= b;
         if (b & pieces(color_of(piece_on(s))))
             pinners |= sniperSq;
     }
   }
-  return result;
+  return blockers;
 }
 
 
@@ -400,14 +432,14 @@ bool Position::legal(Move m) const {
   assert(color_of(moved_piece(m)) == us);
   assert(piece_on(square<KING>(us)) == make_piece(us, KING));
 
-  // If the moving piece is a king, check whether the destination
-  // square is attacked by the opponent.
+  // If the moving piece is a king, check whether the destination square is
+  // attacked by the opponent.
   if (type_of(piece_on(from)) == KING)
       return !(attackers_to(to_sq(m)) & pieces(~us));
 
   // A non-king move is legal if and only if it is not pinned or it
   // is moving along the ray towards or away from the king.
-  return   !(pinned_pieces(us) & from)
+  return   !(blockers_for_king(us) & from)
         ||  aligned(from, to_sq(m), square<KING>(us));
 }
 
@@ -422,6 +454,8 @@ bool Position::pseudo_legal(const Move m) const {
   Square from = from_sq(m);
   Square to = to_sq(m);
   Piece pc = moved_piece(m);
+
+  const Bitboard TRank6BB = (us == WHITE ? Rank6BB : Rank3BB);
 
   // Use a slower but simpler function for uncommon cases
   if (type_of(m) != NORMAL)
@@ -444,8 +478,8 @@ bool Position::pseudo_legal(const Move m) const {
   if (type_of(pc) == PAWN)
   {
       // We have already handled promotion moves, so destination
-      // cannot be on the 6th/3rd rank.
-      if (relative_rank(us, to) >= RANK_6)
+      // cannot be on the 8th/1st rank.
+      if (type_of(pc) == PAWN && (TRank6BB & to)) //redghost
           return false;
 
       if (   !(attacks_from<PAWN>(from, us) & pieces(~us) & to) // Not a capture
@@ -497,7 +531,7 @@ bool Position::gives_check(Move m) const {
       return true;
 
   // Is there a discovered check?
-  if (   (discovered_check_candidates() & from)
+  if (   (st->blockersForKing[~sideToMove] & from)
       && !aligned(from, to, square<KING>(~sideToMove)))
       return true;
 
@@ -555,7 +589,6 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   if (captured)
   {
       Square capsq = to;
-      int old_counting_limit = count<ALL_PIECES>(~color_of(captured)) == 1 ? counting_limit() : 0;
 
       // If the captured piece is a pawn, update pawn hash key, otherwise
       // update non-pawn material.
@@ -572,18 +605,9 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
       st->materialKey ^= Zobrist::psq[captured][pieceCount[captured]];
       prefetch(thisThread->materialTable[st->materialKey]);
 
-      // Update incremental scores
-      st->psq -= PSQT::psq[captured][capsq];
-
       // Reset rule 50 counter unless we are in a pawnless endgame
       if (count<PAWN>() || (type_of(captured) == PAWN && count<ALL_PIECES>(color_of(captured)) > 1))
           st->rule50 = 0;
-      // Baring the opponent's king
-      else if (count<ALL_PIECES>(color_of(captured)) == 1)
-          st->rule50 = 2 * count<ALL_PIECES>();
-      // Bare king captures, increase half-move clock to fake old counting limit
-      else if (count<ALL_PIECES>(~color_of(captured)) == 1)
-          st->rule50 += 2 * (counting_limit() - old_counting_limit);
   }
 
   // Update hash key
@@ -610,27 +634,16 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
           st->materialKey ^=  Zobrist::psq[promotion][pieceCount[promotion]-1]
                             ^ Zobrist::psq[pc][pieceCount[pc]];
 
-          // Update incremental score
-          st->psq += PSQT::psq[promotion][to] - PSQT::psq[pc][to];
-
           // Update material
           st->nonPawnMaterial[us] += PieceValue[MG][promotion];
       }
 
       // Update pawn hash key and prefetch access to pawnsTable
       st->pawnKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
-      prefetch2(thisThread->pawnsTable[st->pawnKey]);
 
-      // Promoting the last pawn when opponent only has a bare king
-      if (!count<PAWN>() && count<ALL_PIECES>(them) == 1)
-          st->rule50 = 2 * count<ALL_PIECES>();
-      // Reset rule 50 counter
-      else
-          st->rule50 = 0;
+      // Reset rule 50 draw counter
+      st->rule50 = 0;
   }
-
-  // Update incremental scores
-  st->psq += PSQT::psq[pc][to] - PSQT::psq[pc][from];
 
   // Set capture piece
   st->capturedPiece = captured;
@@ -645,6 +658,25 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
 
   // Update king attacks used for fast check detection
   set_check_info(st);
+
+  // Calculate the repetition info. It is the ply distance from the previous
+  // occurrence of the same position, negative in the 3-fold case, or zero
+  // if the position was not repeated.
+  st->repetition = 0;
+  int end = std::min(st->rule50, st->pliesFromNull);
+  if (end >= 4)
+  {
+      StateInfo* stp = st->previous->previous;
+      for (int i=4; i <= end; i += 2)
+      {
+          stp = stp->previous->previous;
+          if (stp->key == st->key)
+          {
+              st->repetition = stp->repetition ? -i : i;
+              break;
+          }
+      }
+  }
 
   assert(pos_is_ok());
 }
@@ -716,6 +748,8 @@ void Position::do_null_move(StateInfo& newSt) {
 
   set_check_info(st);
 
+  st->repetition = 0;
+
   assert(pos_is_ok());
 }
 
@@ -758,101 +792,159 @@ bool Position::see_ge(Move m, Value threshold) const {
   if (type_of(m) != NORMAL)
       return VALUE_ZERO >= threshold;
 
+  Bitboard stmAttackers;
   Square from = from_sq(m), to = to_sq(m);
   PieceType nextVictim = type_of(piece_on(from));
-  Color stm = ~color_of(piece_on(from)); // First consider opponent's move
-  Value balance; // Values of the pieces taken by us minus opponent's ones
-  Bitboard occupied, stmAttackers;
+  Color us = color_of(piece_on(from));
+  Color stm = ~us; // First consider opponent's move
+  Value balance;   // Values of the pieces taken by us minus opponent's ones
 
-  balance = PieceValue[MG][piece_on(to)];
+  // The opponent may be able to recapture so this is the best result
+  // we can hope for.
+  balance = PieceValue[MG][piece_on(to)] - threshold;
 
-  if (balance < threshold)
+  if (balance < VALUE_ZERO)
       return false;
 
+  // Now assume the worst possible result: that the opponent can
+  // capture our piece for free.
   balance -= PieceValue[MG][nextVictim];
 
-  if (balance >= threshold) // Always true if nextVictim == KING
+  // If it is enough (like in PxQ) then return immediately. Note that
+  // in case nextVictim == KING we always return here, this is ok
+  // if the given move is legal.
+  if (balance >= VALUE_ZERO)
       return true;
 
-  bool relativeStm = true; // True if the opponent is to move
-  occupied = pieces() ^ from ^ to;
-
-  // Find all attackers to the destination square, with the moving piece removed,
-  // but possibly an X-ray attacker added behind it.
+  // Find all attackers to the destination square, with the moving piece
+  // removed, but possibly an X-ray attacker added behind it.
+  Bitboard occupied = pieces() ^ from ^ to;
   Bitboard attackers = attackers_to(to, occupied) & occupied;
 
   while (true)
   {
       stmAttackers = attackers & pieces(stm);
 
-      // Don't allow pinned pieces to attack pieces except the king as long all
-      // pinners are on their original square.
-      if (!(st->pinnersForKing[stm] & ~occupied))
+      // Don't allow pinned pieces to attack (except the king) as long as
+      // any pinners are on their original square.
+      if (st->pinners[~stm] & occupied)
           stmAttackers &= ~st->blockersForKing[stm];
 
+      // If stm has no more attackers then give up: stm loses
       if (!stmAttackers)
-          return relativeStm;
+          break;
 
-      // Locate and remove the next least valuable attacker
+      // Locate and remove the next least valuable attacker, and add to
+      // the bitboard 'attackers' the possibly X-ray attackers behind it.
       nextVictim = min_attacker<PAWN>(byTypeBB, to, stmAttackers, occupied, attackers);
 
-      if (nextVictim == KING)
-          return relativeStm == bool(attackers & pieces(~stm));
+      stm = ~stm; // Switch side to move
 
-      balance += relativeStm ?  PieceValue[MG][nextVictim]
-                             : -PieceValue[MG][nextVictim];
+      // Negamax the balance with alpha = balance, beta = balance+1 and
+      // add nextVictim's value.
+      //
+      //      (balance, balance+1) -> (-balance-1, -balance)
+      //
+      assert(balance < VALUE_ZERO);
 
-      relativeStm = !relativeStm;
+      balance = -balance - 1 - PieceValue[MG][nextVictim];
 
-      if (relativeStm == (balance >= threshold))
-          return relativeStm;
-
-      stm = ~stm;
+      // If balance is still non-negative after giving away nextVictim then we
+      // win. The only thing to be careful about it is that we should revert
+      // stm if we captured with the king when the opponent still has attackers.
+      if (balance >= VALUE_ZERO)
+      {
+          if (nextVictim == KING && (attackers & pieces(stm)))
+              stm = ~stm;
+          break;
+      }
+      assert(nextVictim != KING);
   }
+  return us != stm; // We break the above loop when stm loses
 }
 
 
-/// Position::is_draw() tests whether the position is drawn by counting rules
-/// 64-move rule, or repetition. It does not detect stalemates.
-/// 64-move rule and 3fold-repetition are no official Makruk rules.
+/// Position::is_draw() tests whether the position is drawn by 50-move rule
+/// or by repetition. It does not detect stalemates.
 
 bool Position::is_draw(int ply) const {
 
-  if (!count<PAWN>())
-  {
-      // K vs. K
-      if (count<ALL_PIECES>() == 2)
-          return true;
+  /* // 64-move rule
+  if (st->rule50 > 127 && (!checkers() || MoveList<LEGAL>(*this).size()))
+      return true; */ // redghost
 
-      // Counting rules
-      if (   st->rule50 > 2 * ((count<ALL_PIECES>(WHITE) == 1 || count<ALL_PIECES>(BLACK) == 1) ? counting_limit() : 64)
-          && (!checkers() || MoveList<LEGAL>(*this).size())
-          && Options["EnableCounting"])
-          return true;
-  }
-  // 64-move rule
-  else if (st->rule50 > 127 && (!checkers() || MoveList<LEGAL>(*this).size()))
+  // Return a draw score if a position repeats once earlier but strictly
+  // after the root, or repeats twice before or at the root.
+  if (st->repetition && st->repetition < ply)
       return true;
+
+  return false;
+}
+
+
+// Position::has_repeated() tests whether there has been at least one repetition
+// of positions since the last capture or pawn move.
+
+bool Position::has_repeated() const {
+
+    StateInfo* stc = st;
+    int end = std::min(st->rule50, st->pliesFromNull);
+    while (end-- >= 4)
+    {
+        if (stc->repetition)
+            return true;
+
+        stc = stc->previous;
+    }
+    return false;
+}
+
+
+/// Position::has_game_cycle() tests if the position has a move which draws by repetition,
+/// or an earlier position has a move that directly reaches the current position.
+
+bool Position::has_game_cycle(int ply) const {
+
+  int j;
 
   int end = std::min(st->rule50, st->pliesFromNull);
 
-  if (end < 4)
+  if (end < 3)
     return false;
 
-  StateInfo* stp = st->previous->previous;
-  int cnt = 0;
+  Key originalKey = st->key;
+  StateInfo* stp = st->previous;
 
-  for (int i = 4; i <= end; i += 2)
+  for (int i = 3; i <= end; i += 2)
   {
       stp = stp->previous->previous;
 
-      // Return a draw score if a position repeats once earlier but strictly
-      // after the root, or repeats twice before or at the root.
-      if (   stp->key == st->key
-          && ++cnt + (ply > i) == 2)
-          return true;
-  }
+      Key moveKey = originalKey ^ stp->key;
+      if (   (j = H1(moveKey), cuckoo[j] == moveKey)
+          || (j = H2(moveKey), cuckoo[j] == moveKey))
+      {
+          Move move = cuckooMove[j];
+          Square s1 = from_sq(move);
+          Square s2 = to_sq(move);
 
+          if (!(between_bb(s1, s2) & pieces()))
+          {
+              if (ply > i)
+                  return true;
+
+              // For nodes before or at the root, check that the move is a
+              // repetition rather than a move to the current position.
+              // In the cuckoo table, both moves Rc1c5 and Rc5c1 are stored in
+              // the same location, so we have to select which square to check.
+              if (color_of(piece_on(empty(s1) ? s2 : s1)) != side_to_move())
+                  continue;
+
+              // For repetitions before or at the root, require one more
+              if (stp->repetition)
+                  return true;
+          }
+      }
+  }
   return false;
 }
 
@@ -892,12 +984,18 @@ void Position::flip() {
 
 bool Position::pos_is_ok() const {
 
-  const bool Fast = true; // Quick (default) or full check?
+  constexpr bool Fast = true; // Quick (default) or full check?
 
   if (   (sideToMove != WHITE && sideToMove != BLACK)
       || piece_on(square<KING>(WHITE)) != W_KING
       || piece_on(square<KING>(BLACK)) != B_KING)
       assert(0 && "pos_is_ok: Default");
+
+  if (  ((pieces(WHITE , PAWN) & (Rank1BB | Rank2BB | Rank6BB | Rank7BB | Rank8BB)) //redghost
+      && (pieces(BLACK , PAWN) & (Rank8BB | Rank7BB | Rank3BB | Rank2BB | Rank1BB)))
+      || pieceCount[W_PAWN] > 8
+      || pieceCount[B_PAWN] > 8)
+      assert(0 && "pos_is_ok: Pawns");
 
   if (Fast)
       return true;
@@ -906,11 +1004,6 @@ bool Position::pos_is_ok() const {
       || pieceCount[B_KING] != 1
       || attackers_to(square<KING>(~sideToMove)) & pieces(sideToMove))
       assert(0 && "pos_is_ok: Kings");
-
-  if (   (pieces(PAWN) & (Rank1BB | Rank8BB))
-      || pieceCount[W_PAWN] > 8
-      || pieceCount[B_PAWN] > 8)
-      assert(0 && "pos_is_ok: Pawns");
 
   if (   (pieces(WHITE) & pieces(BLACK))
       || (pieces(WHITE) | pieces(BLACK)) != pieces()
